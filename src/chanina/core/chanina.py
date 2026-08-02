@@ -7,7 +7,9 @@ Two engines are supported:
   is supervised as a separate OS subprocess (see browser_process.py /
   BrowserSupervisor) so that no live Playwright/asyncio state exists here
   before the worker pool forks. Each forked worker child connects to the
-  shared browser over CDP and creates one isolated BrowserContext per task.
+  shared browser over CDP and creates one isolated BrowserContext per task
+  - unless a profile_dir is set, in which case every task instead reuses
+  that profile's one persistent context (see reuses_shared_context).
 - "firefox": Playwright's Python bindings have no supported way to share a
   Firefox instance across OS processes (no launch_server()/connect() pair
   outside Node.js, and connect_over_cdp() only works against Chromium).
@@ -136,10 +138,11 @@ class ChaninaApplication:
         self._supervisor: BrowserSupervisor | None = None
         self._pw: Playwright | None = None
         self._browser = None
-        # True once _launch_local ends up with a persistent BrowserContext
-        # (firefox + profile_dir) instead of a Browser: see new_context()
-        # and reuses_shared_context below.
-        self._shared_context_mode = False
+        # Set (in _connect / _launch_local) to the profile's persistent
+        # BrowserContext when profile_dir is in use, so every task reuses
+        # it instead of getting an isolated one. See new_context() and
+        # reuses_shared_context below.
+        self._shared_context: BrowserContext | None = None
 
         if playwright_enabled:
             signals.worker_process_init.connect(self._on_process_init)
@@ -223,12 +226,29 @@ class ChaninaApplication:
         logging.info("Browser handle closed for this worker.")
 
     def _connect(self) -> None:
-        """ Chromium engine: attach to the shared browser over CDP. """
+        """
+        Chromium engine: attach to the shared browser over CDP.
+
+        With a profile_dir, the browser was launched (in browser_process.py)
+        via launch_persistent_context, which creates exactly one
+        BrowserContext backed by that profile's cookies/storage/etc. That
+        context is visible here too, over CDP, as browser.contexts[0] - a
+        fresh one from new_context() would be an unrelated, blank context
+        that never sees the profile's state. So with a profile, every task
+        reuses that same context instead (see new_context()).
+        """
         endpoint = self.redis.get(self._browser_key)
         if not endpoint:
             raise ConnectionError(f"No browser CDP endpoint published under '{self._browser_key}'.")
         self._pw = sync_playwright().start()
         self._browser = self._pw.chromium.connect_over_cdp(endpoint.decode())
+        if self._profile_dir:
+            if not self._browser.contexts:
+                raise RuntimeError(
+                    "profile_dir is set but the shared browser has no context yet; "
+                    "expected its persistent profile context to already exist."
+                )
+            self._shared_context = self._browser.contexts[0]
 
     def _launch_local(self) -> None:
         """
@@ -256,20 +276,24 @@ class ChaninaApplication:
                 user_data_dir=self._profile_dir,
                 headless=self._headless,
             )
-            self._shared_context_mode = True
+            # Here the persistent context IS the launched handle itself.
+            self._shared_context = self._browser
         else:
             self._browser = self._pw.firefox.launch(headless=self._headless)
-            self._shared_context_mode = False
+            self._shared_context = None
 
     def _disconnect(self) -> None:
-        # For chromium this disconnects without closing the remote browser;
-        # for firefox this owns and actually closes the local browser.
+        # For chromium this disconnects without closing the remote browser
+        # (its persistent profile context, if any, keeps living there for
+        # the next worker to reconnect to); for firefox this owns and
+        # actually closes the local browser (context included).
         if self._browser is not None:
             try:
                 self._browser.close()
             except Exception as e:
                 logging.error(f"Closed the browser handle with an exception: {e}")
             self._browser = None
+        self._shared_context = None
         if self._pw is not None:
             self._pw.stop()
             self._pw = None
@@ -298,16 +322,17 @@ class ChaninaApplication:
     def reuses_shared_context(self) -> bool:
         """
         True when new_context() hands back the same BrowserContext on
-        every call instead of a fresh, isolated one (currently: the
-        firefox engine with a profile_dir set). Libretto uses this to
-        know whether it owns the context it got and should close it once
-        the task returns.
+        every call instead of a fresh, isolated one (currently: whenever
+        profile_dir is set, for either engine - a fresh context wouldn't
+        see the profile's cookies/storage). Libretto uses this to know
+        whether it owns the context it got and should close it once the
+        task returns.
         """
-        return self._shared_context_mode
+        return self._shared_context is not None
 
     def _acquire_context(self, **kwargs) -> BrowserContext:
-        if self._shared_context_mode:
-            return self._browser
+        if self._shared_context is not None:
+            return self._shared_context
         return self._browser.new_context(**kwargs)
 
     def new_context(self, **kwargs) -> BrowserContext:
@@ -315,8 +340,8 @@ class ChaninaApplication:
         Get a BrowserContext for a task to use.
 
         Normally this creates a fresh, isolated context (meant to be used
-        by one task and closed afterwards). The one exception is the
-        firefox engine with a profile_dir: see reuses_shared_context.
+        by one task and closed afterwards). The one exception is when a
+        profile_dir is set: see reuses_shared_context.
         """
         if not self._playwright_enabled:
             raise RuntimeError("Playwright is disabled for this application.")

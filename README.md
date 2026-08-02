@@ -133,11 +133,14 @@ app = ChaninaApplication(
 )
 ```
 
-- **Chromium**: since there's only ever one shared instance, the profile just applies to it —
-  no concurrency caveats. Tasks still each get their own isolated context.
+With a profile set, tasks stop getting an isolated context each — a fresh context wouldn't see
+the profile's cookies/storage anyway, so every task reuses the profile's own persistent context
+instead (concurrently, if several tasks run at once). Without a profile, contexts stay isolated
+per task as usual.
+
+- **Chromium**: since there's only ever one shared instance, this has no concurrency caveats.
 - **Firefox**: a given profile directory can only be opened by one running Firefox at a time,
-  so this only works cleanly with `concurrency=1`. With a profile set, every task on that worker
-  process shares the same persistent context instead of getting an isolated one per task.
+  so this only works cleanly with `concurrency=1`.
 
 ---
 
