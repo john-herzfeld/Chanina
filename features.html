@@ -105,12 +105,11 @@
 <h3>Object(s) Reference(s)<a class="headerlink" href="#object-s-reference-s" title="Link to this heading"></a></h3>
 <dl class="py class">
 <dt class="sig sig-object py">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">chanina.core.worker_session.</span></span><span class="sig-name descname"><span class="pre">WorkerSession</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">caller_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">headless</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">browser_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">profile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession"><span class="viewcode-link"><span class="pre">[source]</span></span></a></dt>
-<dd><p>The ‘WorkerSession’ object is a shared IN MEMORY object between every tasks inside a
-same worker. This means that this object is not serialized, but lives in memory in the
-same space as every other tasks and processes inside the current worker.</p>
-<p>We start a playwright session here, which will live as long as this WorkerSession
-lives.</p>
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">chanina.core.worker_session.</span></span><span class="sig-name descname"><span class="pre">WorkerSession</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">browser_context</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">playwright.sync_api.BrowserContext</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession"><span class="viewcode-link"><span class="pre">[source]</span></span></a></dt>
+<dd><p>Backward-compatible wrapper around a per-task <code class="docutils literal notranslate"><span class="pre">BrowserContext</span></code>.</p>
+<p>Instances are created internally by <code class="xref py py-class docutils literal notranslate"><span class="pre">chanina.core.libretti.Libretto</span></code>
+for every task invocation; user code should not need to construct this
+class directly.</p>
 </dd></dl>
 
 </section>

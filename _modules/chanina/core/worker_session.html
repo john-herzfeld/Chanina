@@ -82,93 +82,123 @@
            <div itemprop="articleBody">
              
   <h1>Source code for chanina.core.worker_session</h1><div class="highlight"><pre>
-<span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
-<span class="kn">import</span><span class="w"> </span><span class="nn">logging</span>
+<span></span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">Deprecated compatibility layer for the pre-refactor ``WorkerSession`` API.</span>
 
-<span class="kn">from</span><span class="w"> </span><span class="nn">playwright.sync_api</span><span class="w"> </span><span class="kn">import</span> <span class="n">Page</span><span class="p">,</span> <span class="n">Playwright</span><span class="p">,</span> <span class="n">sync_playwright</span>
+<span class="sd">Before the shared-browser refactor, ``ChaninaApplication`` kept one</span>
+<span class="sd">``WorkerSession`` alive per worker *process* (a Playwright driver plus a</span>
+<span class="sd">single ``BrowserContext``), and libretto functions received that shared</span>
+<span class="sd">session as their context argument. Since the refactor, a fresh</span>
+<span class="sd">``BrowserContext`` is created per *task* instead (see</span>
+<span class="sd">:mod:`chanina.core.browser_supervisor` and :meth:`Libretto._register_as_task</span>
+<span class="sd">&lt;chanina.core.libretti.Libretto._register_as_task&gt;`), and that context is</span>
+<span class="sd">what libretto functions receive.</span>
+
+<span class="sd">``WorkerSession`` now wraps that per-task context so code written against</span>
+<span class="sd">the old API keeps working unmodified: attribute access not defined here</span>
+<span class="sd">transparently falls through to the wrapped ``BrowserContext`` (so</span>
+<span class="sd">``session.new_page()``, ``session.cookies()``, etc. behave exactly like</span>
+<span class="sd">before), while the handful of members that only existed on the old</span>
+<span class="sd">process-level session (``user_context``, ``playwright``, dict-style</span>
+<span class="sd">``new_page(args)``) raise a ``DeprecationWarning`` on use.</span>
+
+<span class="sd">New code should just use the context argument directly and drop any of the</span>
+<span class="sd">attributes flagged below as deprecated.</span>
+<span class="sd">&quot;&quot;&quot;</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">warnings</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">typing</span><span class="w"> </span><span class="kn">import</span> <span class="n">Any</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">playwright.sync_api</span><span class="w"> </span><span class="kn">import</span> <span class="n">BrowserContext</span><span class="p">,</span> <span class="n">Page</span><span class="p">,</span> <span class="n">Playwright</span>
 
 
 <div class="viewcode-block" id="WorkerSession">
 <a class="viewcode-back" href="../../../features.html#chanina.core.worker_session.WorkerSession">[docs]</a>
 <span class="k">class</span><span class="w"> </span><span class="nc">WorkerSession</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        The &#39;WorkerSession&#39; object is a shared IN MEMORY object between every tasks inside a</span>
-<span class="sd">        same worker. This means that this object is not serialized, but lives in memory in the</span>
-<span class="sd">        same space as every other tasks and processes inside the current worker.</span>
+<span class="sd">    Backward-compatible wrapper around a per-task ``BrowserContext``.</span>
 
-<span class="sd">        We start a playwright session here, which will live as long as this WorkerSession</span>
-<span class="sd">        lives.</span>
+<span class="sd">    Instances are created internally by :class:`chanina.core.libretti.Libretto`</span>
+<span class="sd">    for every task invocation; user code should not need to construct this</span>
+<span class="sd">    class directly.</span>
 <span class="sd">    &quot;&quot;&quot;</span>
-    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
-        <span class="bp">self</span><span class="p">,</span>
-        <span class="n">caller_path</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-        <span class="n">headless</span><span class="p">:</span> <span class="nb">bool</span><span class="p">,</span>
-        <span class="n">browser_name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span>
-        <span class="n">app</span><span class="p">,</span>
-        <span class="n">profile</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-        <span class="c1"># Starting playwright process ...</span>
-        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Running playwright from dir : &#39;</span><span class="si">{</span><span class="n">caller_path</span><span class="si">}</span><span class="s2">&#39;&quot;</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_pw</span> <span class="o">=</span> <span class="n">sync_playwright</span><span class="p">()</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
 
-        <span class="bp">self</span><span class="o">.</span><span class="n">_browser_name</span> <span class="o">=</span> <span class="n">browser_name</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_profile</span> <span class="o">=</span> <span class="n">profile</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_headless</span> <span class="o">=</span> <span class="n">headless</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_profile_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">abspath</span><span class="p">(</span><span class="n">profile</span><span class="p">)</span>
-
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">browser_context</span><span class="p">:</span> <span class="n">BrowserContext</span><span class="p">,</span> <span class="n">app</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span> <span class="o">=</span> <span class="n">browser_context</span>
         <span class="bp">self</span><span class="o">.</span><span class="n">app</span> <span class="o">=</span> <span class="n">app</span>
-
-        <span class="bp">self</span><span class="o">.</span><span class="n">_init_context</span><span class="p">()</span>
-
-        <span class="c1"># Local context to use inside a task.</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">user_context</span> <span class="o">=</span> <span class="p">{}</span>
-
-        <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Initialized&quot;</span><span class="p">)</span>
+        <span class="c1"># Pre-refactor, this dict lived for the lifetime of the worker</span>
+        <span class="c1"># process and was shared across every task it handled. It is now</span>
+        <span class="c1"># scoped to a single task, since contexts are created per task.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">user_context</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="p">{}</span>
 
     <span class="nd">@property</span>
     <span class="k">def</span><span class="w"> </span><span class="nf">playwright</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Playwright</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot; Return playwright context. &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pw</span>
-
-    <span class="k">def</span><span class="w"> </span><span class="nf">_init_context</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
 <span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">        Function to initialize the browser_context.</span>
-<span class="sd">        Depending on the profile and browser_name.</span>
+<span class="sd">        Deprecated. Returns the app&#39;s internal Playwright driver handle.</span>
+
+<span class="sd">        This used to be the session&#39;s own dedicated driver instance; it is</span>
+<span class="sd">        now the single driver shared by every task in the worker process,</span>
+<span class="sd">        so mutating it from task code is unsafe and unsupported.</span>
 <span class="sd">        &quot;&quot;&quot;</span>
-        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_browser_name</span> <span class="o">==</span> <span class="s2">&quot;firefox&quot;</span><span class="p">:</span>
-            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_profile</span><span class="p">:</span>
-                <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Launching firefox with persistent context. (profile: &#39;</span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">_profile_path</span><span class="si">}</span><span class="s2">&#39;)&quot;</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pw</span><span class="o">.</span><span class="n">firefox</span><span class="o">.</span><span class="n">launch_persistent_context</span><span class="p">(</span>
-                    <span class="n">user_data_dir</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_profile_path</span><span class="p">,</span>
-                    <span class="n">headless</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_headless</span>
-                <span class="p">)</span>
-            <span class="k">else</span><span class="p">:</span>
-                <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Launching firefox.&quot;</span><span class="p">)</span>
-                <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pw</span><span class="o">.</span><span class="n">firefox</span><span class="o">.</span><span class="n">launch</span><span class="p">(</span><span class="n">headless</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_headless</span><span class="p">)</span><span class="o">.</span><span class="n">new_context</span><span class="p">()</span>
-        <span class="k">elif</span> <span class="bp">self</span><span class="o">.</span><span class="n">_browser_name</span> <span class="o">==</span> <span class="s2">&quot;chrome&quot;</span><span class="p">:</span>
-            <span class="n">logging</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="s2">&quot;Launching Chrome&quot;</span><span class="p">)</span>
-            <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_pw</span><span class="o">.</span><span class="n">chromium</span><span class="o">.</span><span class="n">launch</span><span class="p">(</span><span class="n">headless</span><span class="o">=</span><span class="bp">self</span><span class="o">.</span><span class="n">_headless</span><span class="p">)</span><span class="o">.</span><span class="n">new_context</span><span class="p">()</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">&quot;Browser must be &#39;firefox&#39; or &#39;chrome&#39;&quot;</span><span class="p">)</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+            <span class="s2">&quot;WorkerSession.playwright is deprecated and now returns the &quot;</span>
+            <span class="s2">&quot;worker process&#39;s shared Playwright driver instead of a &quot;</span>
+            <span class="s2">&quot;session-private one. It will be removed in a future release.&quot;</span><span class="p">,</span>
+            <span class="ne">DeprecationWarning</span><span class="p">,</span>
+            <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">app</span><span class="o">.</span><span class="n">_pw</span>
 
 <div class="viewcode-block" id="WorkerSession.new_page">
 <a class="viewcode-back" href="../../../core.html#chanina.core.worker_session.WorkerSession.new_page">[docs]</a>
-    <span class="k">def</span><span class="w"> </span><span class="nf">new_page</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">args</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="p">{})</span> <span class="o">-&gt;</span> <span class="n">Page</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot; Create a new page, overrides the &#39;_current_page&#39;. &quot;&quot;&quot;</span>
-        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span><span class="o">.</span><span class="n">new_page</span><span class="p">(</span><span class="o">**</span><span class="n">args</span><span class="p">)</span></div>
+    <span class="k">def</span><span class="w"> </span><span class="nf">new_page</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">args</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Page</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Create a new page on the wrapped context.</span>
+
+<span class="sd">        The legacy signature took a single positional ``dict`` of Playwright</span>
+<span class="sd">        kwargs (``session.new_page({&quot;viewport&quot;: ...})``); the modern</span>
+<span class="sd">        ``BrowserContext.new_page`` takes real keyword arguments instead.</span>
+<span class="sd">        Both styles are accepted here, but the positional-dict form is</span>
+<span class="sd">        deprecated.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="k">if</span> <span class="n">args</span><span class="p">:</span>
+            <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+                <span class="s2">&quot;WorkerSession.new_page(args={...}) is deprecated, pass &quot;</span>
+                <span class="s2">&quot;keyword arguments directly instead: new_page(**kwargs).&quot;</span><span class="p">,</span>
+                <span class="ne">DeprecationWarning</span><span class="p">,</span>
+                <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+            <span class="p">)</span>
+            <span class="n">kwargs</span> <span class="o">=</span> <span class="p">{</span><span class="o">**</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">}</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span><span class="o">.</span><span class="n">new_page</span><span class="p">(</span><span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></div>
 
 
 <div class="viewcode-block" id="WorkerSession.close">
 <a class="viewcode-back" href="../../../core.html#chanina.core.worker_session.WorkerSession.close">[docs]</a>
     <span class="k">def</span><span class="w"> </span><span class="nf">close</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
-<span class="w">        </span><span class="sd">&quot;&quot;&quot; Close the context. &quot;&quot;&quot;</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">        Deprecated. Closes the wrapped context.</span>
+
+<span class="sd">        Libretto already closes the task&#39;s context automatically once the</span>
+<span class="sd">        task returns, so calling this explicitly is no longer necessary.</span>
+<span class="sd">        It remains safe to call (idempotent) for old code that still does.</span>
+<span class="sd">        &quot;&quot;&quot;</span>
+        <span class="n">warnings</span><span class="o">.</span><span class="n">warn</span><span class="p">(</span>
+            <span class="s2">&quot;WorkerSession.close() is deprecated: the task context is now &quot;</span>
+            <span class="s2">&quot;closed automatically by Libretto after the task returns.&quot;</span><span class="p">,</span>
+            <span class="ne">DeprecationWarning</span><span class="p">,</span>
+            <span class="n">stacklevel</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span>
+        <span class="p">)</span>
         <span class="k">try</span><span class="p">:</span>
             <span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
-        <span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-            <span class="n">logging</span><span class="o">.</span><span class="n">error</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Closed with an exception : </span><span class="si">{</span><span class="n">e</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
-        <span class="bp">self</span><span class="o">.</span><span class="n">_pw</span><span class="o">.</span><span class="n">stop</span><span class="p">()</span>
-        <span class="n">logging</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&quot;Stopped.&quot;</span><span class="p">)</span></div>
-</div>
+        <span class="k">except</span> <span class="ne">Exception</span><span class="p">:</span>
+            <span class="k">pass</span></div>
+
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__getattr__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+        <span class="c1"># Only reached for attributes not found on the instance/class</span>
+        <span class="c1"># itself, i.e. anything that isn&#39;t one of the members defined</span>
+        <span class="c1"># above. Transparently proxies to the wrapped BrowserContext so</span>
+        <span class="c1"># this object can stand in for a raw context too.</span>
+        <span class="k">return</span> <span class="nb">getattr</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">browser_context</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span></div>
 
 </pre></div>
 

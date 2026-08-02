@@ -115,31 +115,58 @@
 </section>
 <section id="module-chanina.core.worker_session">
 <span id="worker-session"></span><h2>Worker Session<a class="headerlink" href="#module-chanina.core.worker_session" title="Link to this heading"></a></h2>
+<p>Deprecated compatibility layer for the pre-refactor <code class="docutils literal notranslate"><span class="pre">WorkerSession</span></code> API.</p>
+<p>Before the shared-browser refactor, <code class="docutils literal notranslate"><span class="pre">ChaninaApplication</span></code> kept one
+<code class="docutils literal notranslate"><span class="pre">WorkerSession</span></code> alive per worker <em>process</em> (a Playwright driver plus a
+single <code class="docutils literal notranslate"><span class="pre">BrowserContext</span></code>), and libretto functions received that shared
+session as their context argument. Since the refactor, a fresh
+<code class="docutils literal notranslate"><span class="pre">BrowserContext</span></code> is created per <em>task</em> instead (see
+<code class="xref py py-mod docutils literal notranslate"><span class="pre">chanina.core.browser_supervisor</span></code> and <code class="xref py py-meth docutils literal notranslate"><span class="pre">Libretto._register_as_task</span></code>), and that context is
+what libretto functions receive.</p>
+<p><code class="docutils literal notranslate"><span class="pre">WorkerSession</span></code> now wraps that per-task context so code written against
+the old API keeps working unmodified: attribute access not defined here
+transparently falls through to the wrapped <code class="docutils literal notranslate"><span class="pre">BrowserContext</span></code> (so
+<code class="docutils literal notranslate"><span class="pre">session.new_page()</span></code>, <code class="docutils literal notranslate"><span class="pre">session.cookies()</span></code>, etc. behave exactly like
+before), while the handful of members that only existed on the old
+process-level session (<code class="docutils literal notranslate"><span class="pre">user_context</span></code>, <code class="docutils literal notranslate"><span class="pre">playwright</span></code>, dict-style
+<code class="docutils literal notranslate"><span class="pre">new_page(args)</span></code>) raise a <code class="docutils literal notranslate"><span class="pre">DeprecationWarning</span></code> on use.</p>
+<p>New code should just use the context argument directly and drop any of the
+attributes flagged below as deprecated.</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="chanina.core.worker_session.WorkerSession">
-<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">chanina.core.worker_session.</span></span><span class="sig-name descname"><span class="pre">WorkerSession</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">caller_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">headless</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">browser_name</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">profile</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">''</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#chanina.core.worker_session.WorkerSession" title="Link to this definition"></a></dt>
+<span class="property"><span class="k"><span class="pre">class</span></span><span class="w"> </span></span><span class="sig-prename descclassname"><span class="pre">chanina.core.worker_session.</span></span><span class="sig-name descname"><span class="pre">WorkerSession</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">browser_context</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">playwright.sync_api.BrowserContext</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">app</span></span></em><span class="sig-paren">)</span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#chanina.core.worker_session.WorkerSession" title="Link to this definition"></a></dt>
 <dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
-<p>The ‘WorkerSession’ object is a shared IN MEMORY object between every tasks inside a
-same worker. This means that this object is not serialized, but lives in memory in the
-same space as every other tasks and processes inside the current worker.</p>
-<p>We start a playwright session here, which will live as long as this WorkerSession
-lives.</p>
+<p>Backward-compatible wrapper around a per-task <code class="docutils literal notranslate"><span class="pre">BrowserContext</span></code>.</p>
+<p>Instances are created internally by <code class="xref py py-class docutils literal notranslate"><span class="pre">chanina.core.libretti.Libretto</span></code>
+for every task invocation; user code should not need to construct this
+class directly.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="chanina.core.worker_session.WorkerSession.close">
 <span class="sig-name descname"><span class="pre">close</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession.close"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#chanina.core.worker_session.WorkerSession.close" title="Link to this definition"></a></dt>
-<dd><p>Close the context.</p>
+<dd><p>Deprecated. Closes the wrapped context.</p>
+<p>Libretto already closes the task’s context automatically once the
+task returns, so calling this explicitly is no longer necessary.
+It remains safe to call (idempotent) for old code that still does.</p>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="chanina.core.worker_session.WorkerSession.new_page">
-<span class="sig-name descname"><span class="pre">new_page</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">{}</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">playwright.sync_api.Page</span></span></span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession.new_page"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#chanina.core.worker_session.WorkerSession.new_page" title="Link to this definition"></a></dt>
-<dd><p>Create a new page, overrides the ‘_current_page’.</p>
+<span class="sig-name descname"><span class="pre">new_page</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">args</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">dict</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">**</span></span><span class="n"><span class="pre">kwargs</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">playwright.sync_api.Page</span></span></span><a class="reference internal" href="_modules/chanina/core/worker_session.html#WorkerSession.new_page"><span class="viewcode-link"><span class="pre">[source]</span></span></a><a class="headerlink" href="#chanina.core.worker_session.WorkerSession.new_page" title="Link to this definition"></a></dt>
+<dd><p>Create a new page on the wrapped context.</p>
+<p>The legacy signature took a single positional <code class="docutils literal notranslate"><span class="pre">dict</span></code> of Playwright
+kwargs (<code class="docutils literal notranslate"><span class="pre">session.new_page({&quot;viewport&quot;:</span> <span class="pre">...})</span></code>); the modern
+<code class="docutils literal notranslate"><span class="pre">BrowserContext.new_page</span></code> takes real keyword arguments instead.
+Both styles are accepted here, but the positional-dict form is
+deprecated.</p>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="chanina.core.worker_session.WorkerSession.playwright">
 <span class="property"><span class="k"><span class="pre">property</span></span><span class="w"> </span></span><span class="sig-name descname"><span class="pre">playwright</span></span><span class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">playwright.sync_api.Playwright</span></span><a class="headerlink" href="#chanina.core.worker_session.WorkerSession.playwright" title="Link to this definition"></a></dt>
-<dd><p>Return playwright context.</p>
+<dd><p>Deprecated. Returns the app’s internal Playwright driver handle.</p>
+<p>This used to be the session’s own dedicated driver instance; it is
+now the single driver shared by every task in the worker process,
+so mutating it from task code is unsafe and unsupported.</p>
 </dd></dl>
 
 </dd></dl>
