@@ -1,6 +1,6 @@
 [project]
 name = "chanina"
-version = "0.4.5"
+version = "1.0.0"
 description = " Chanina is a Python application that helps your playwright to build the best libretti."
 authors = [
     {name = "Leo Hehlen",email = "leo.hehlen@pc-rtx.com"}
@@ -12,19 +12,18 @@ dependencies = [
     "colorama (>=0.4.6,<0.5.0)",
     "celery (>=5.5.3,<6.0.0)",
     "redis (>=6.4.0,<7.0.0)",
-    "uvicorn (>=0.38.0,<0.39.0)",
 ]
 
 [tool.poetry]
 packages = [{include = "chanina", from = "src"}]
 
 [tool.poetry.scripts]
-tests = "tests.tests:run"
-workflow = "tests.workflow:run"
-cli = "src.chanina.__main__:run"
-docs = "build_docs:run"
+cli = "chanina.__main__:run"
 
 [tool.poetry.dependencies]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.0"
 
 [tool.poetry.group.docs.dependencies]
 sphinx = "^8.2.3"

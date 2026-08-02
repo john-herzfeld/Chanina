@@ -1,50 +1,33 @@
-""" 
-These are default features which have internal purposes and are built at the instanciation
-of the ChaninaApplication object.
+"""
+Default libretti with internal purposes, registered on every
+ChaninaApplication instance at instantiation time.
 """
 import logging
-from chanina.core.worker_session import WorkerSession
 
 
-def chanina_new_page(*args, **kwargs):
+def build_default_libretti(app) -> None:
     """
-    Open a new_page on the current session. This changes the 'current_page'
-    of the session for any other tasks that will be ran after.
-    """
-    session = kwargs.get("session")
-    if not session:
-        for a in args:
-            if isinstance(a, WorkerSession):
-                session = a
-    if not session:
-        return
+    Register the built-in libretti on ``app``.
 
-    try:
-        session.new_page()
-    except Exception as e:
-        logging.error(f"[ChaninaDefaultFeature] Failed to open a new page : {e}")
-
-def chanina_list_libretti(*args, **kwargs):
+    The ``'chanina.*'`` prefix is reserved for these internal tasks; user
+    libretti should not be registered under it.
     """
-    print a dictionnary of the features.
-    """
-    session = kwargs.get("session")
-    if not session:
-        for a in args:
-            if isinstance(a, WorkerSession):
-                session = a
-    if not session:
-        return
-    logging.info(f"[ChaninaDefaultFeature] chanina.list_features: {session.app.libretti}")
+    def chanina_new_page(*args, **_):
+        """
+        Open a new page on the injected session, mostly useful to
+        sanity-check that the shared browser is reachable.
+        """
+        session = args[0] if args else None
+        if session is None:
+            return
+        try:
+            session.new_page()
+        except Exception as e:
+            logging.error(f"[ChaninaDefaultFeature] Failed to open a new page: {e}")
 
+    def chanina_list_libretti(*_, **__):
+        """ Log the dictionary of the currently registered libretti. """
+        logging.info(f"[ChaninaDefaultFeature] chanina.list_libretti: {app.libretti}")
 
-def build_default_libretti(app):
-    """
-    There are generic useful features that can be implemented, it must
-    be implemented here, and the app needs to be the user's app instance.
-
-    The prefix 'chanina.*' is a reserved string for identifiers of internal
-    tasks.
-    """
     app.libretto("chanina.list_libretti")(chanina_list_libretti)
     app.libretto("chanina.new_page")(chanina_new_page)

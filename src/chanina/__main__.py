@@ -1,12 +1,12 @@
 import logging
 from argparse import ArgumentParser
 
-from uvicorn.importer import import_from_string, ImportFromStringError
-
 from chanina.core.chanina import ChaninaApplication
+from chanina.utils import import_from_string, ImportFromStringError
 
 
 def import_application_object(path: str) -> ChaninaApplication:
+    """ Import the ChaninaApplication instance at 'module.module:attribute'. """
     try:
         chanina_app = import_from_string(path)
     except ImportFromStringError as e:
@@ -33,18 +33,19 @@ def import_config(config: list[str]):
     for kv in config:
         if not "=" in kv:
             continue
-        k, v = kv.split("=")
+        k, v = kv.split("=", 1)
         if not k or not v:
             raise ValueError(f"Arguments passed for flag '-r' but could not be turned into a valid dict. ({kv})")
         conf[k] = v
 
     if not conf:
-        raise KeyError("Arguments passed for flag '-r' got parsed into an empty dictionnary.")
+        raise KeyError("Arguments passed for flag '-r' got parsed into an empty dictionary.")
 
     return conf
 
 
-def add_arguments(argparser: ArgumentParser):
+def add_arguments(argparser: ArgumentParser) -> None:
+    """ Register the chanina CLI's arguments on argparser. """
     group = argparser.add_mutually_exclusive_group(required=False)
     argparser.add_argument(
         "--app",
@@ -76,9 +77,10 @@ def add_arguments(argparser: ArgumentParser):
     )
 
 
-def run_worker(app: ChaninaApplication, command: str = "worker", **options):
+def run_worker(app: ChaninaApplication, command: str = "worker", **options) -> None:
     """
-    run the celery worker replacing every k=v args passed in the cli as --k=v or --k if v is bool.
+    Start the Celery worker, forwarding every k=v CLI argument as --k=v
+    (or bare --k when v is a truthy bool).
     """
     argv = [command]
 
@@ -90,14 +92,11 @@ def run_worker(app: ChaninaApplication, command: str = "worker", **options):
         else:
             argv.append(f"--{k}={v}")
 
-    if app.playwright_enabled:
-        argv.append("--concurrency=1")
-
     app.celery.start(argv)
 
 
-def run():
-    # Handle the arguments for the run metadatas.
+def run() -> None:
+    """ Entry point for `python -m chanina`. """
     argparser = ArgumentParser()
     add_arguments(argparser)
     args = argparser.parse_args()
