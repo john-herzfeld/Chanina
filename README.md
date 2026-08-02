@@ -1,23 +1,25 @@
 # Chanina
 
-**Chanina** is a decorator based API that makes deploying workflows of playwright features easy and scalable.
-The developper writes functions called 'features' which are injected a "WorkerSession" object that is a Playwright context.
-This context is wrapped by Chanina to offer tools and functionnalities that makes implementing basic routines easier.
-
-The workflows can be then written in YAML or JSON, and then Workers and Features are ran and orchestrated by the CLI.
-
-This aims at transforming what is often a tedious and imprecise process, to a more scalable, developper friendly and robust
-part of your tests suite or data extraction mecanisms.
+**Chanina** is a decorator-based API for running Playwright browser automation as scalable
+Celery tasks. You write plain functions ("libretti") decorated with `@app.libretto(...)`;
+Chanina takes care of the browser lifecycle and hands each task an isolated browser session.
 
 ---
 
 ## Features
 
-- **Playwright session management**: `WorkerSession` Inject the Playwright context, pages, and utility tools among all features executed in a worker.
-- **Celery based task system**: Enjoy Celery's full functionnlities and configs for tasks with the `@feature` decorator.
-- **Complex workflows**: support for chains and groups of tasks, with sequences managed automatically.
-- **CLI**: run workflows or tasks from the terminal.
-- **Isolated browser profiles**: manage profiles to prevent conflicts between workers and the main playwright processes.
+- **Shared Chromium across workers**: with the default `browser_engine="chromium"`, a single
+  Chromium instance is supervised as its own subprocess and shared by every worker process over
+  CDP. Each task still gets its own isolated `BrowserContext`, but you're not paying for one
+  browser per worker process.
+- **Firefox, one per worker process**: `browser_engine="firefox"` launches a local Firefox for
+  each worker process instead (Playwright has no way to share a Firefox instance across
+  processes the way it does for Chromium over CDP).
+- **Persistent browser profiles**: pass `profile_dir` to keep history/cookies/cache/extensions
+  on disk across restarts, for either engine.
+- **Celery-based task system**: every libretto is a real Celery task — use `bind=True` and any
+  other Celery task option you'd normally use.
+- **CLI**: run a worker, or dispatch a single libretto, from the terminal.
 
 ---
 
@@ -38,113 +40,117 @@ poetry add chanina
 poetry install
 ```
 
----
-
-## Running Workers
-
-Running the worker is done via the CLI. 
-After indicating the path to the app, you have to precise the "-c" flags, and every arguments after will be passed to celery.
+Playwright needs its browsers installed separately:
 
 ```bash
-chanina -a path_to_myapp:app -c --loglevel=info --other-celery-conf=value ...
+poetry run playwright install chromium firefox
 ```
 
 ---
 
 ## Usage
 
-### Build a basic feature 
-
+### Define an app
 
 ```python
-@app.feature("my_task")
-def do_something(session: WorkerSession, args: dict):
-    # session is the shared WorkerSession containing the current page and utilities
+# myapp.py
+from chanina import ChaninaApplication
+
+app = ChaninaApplication(
+    __file__,
+    browser_engine="chromium",       # or "firefox"
+    headless=True,
+    backend="redis://localhost:6379/0",
+    broker="redis://localhost:6379/0",
+)
+```
+
+### Write a libretto
+
+```python
+@app.libretto("visit_page")
+def visit_page(session, args: dict):
+    # `session` is a WorkerSession wrapping an isolated playwright BrowserContext,
+    # created fresh for this task and closed automatically once it returns.
     page = session.new_page()
-    session.goto(page, "https://example.com")
-    session.close_page(page)
+    page.goto(args["url"])
+    title = page.title()
+    return title
 ```
 
-The first parameter of the feature's function is always the WorkerSession object.
+The first parameter of a libretto function is always the session, and the last is always the
+`args` dict the task was invoked with. If you use Celery's `bind=True`, the bound task instance
+comes first instead, before the session:
 
-!! Except when using the celery argument 'bind=True' parameter for the task, in which case the first parameter
-is the instance of the class.
-
-
-### Create and execute workflows  
-
-A workflow is a file in which you can construct a sequence of features and specifies arguments.
-The workflow has two main sections : 'steps' and 'instance'.
-
-- The 'steps' section are the features you want to gather in the worker, their identifier, flow_id and flow_type.
-If you pass args to a step defined here then it will be the default args passed to every instances.
-
-- The 'instances' section is where you orchestrate the order in which the features are added to the flow_type, and the arguments they are running with. 
-The args you pass there update the base args definied in the steps if one was defined.
-
-Example:
-
-If you have a 'extract_html' feature, and you add it in your workflow, you can add as much instance of it as you need page
-to extract_html from, passing the page url in the 'args' key.
-
-- Every step has a 'flow_type' argument, that can be 'chain' or 'group', and will determine the kind of celery task it will be.
-
-**NOTE**
-
-The sequence is built in the order of the instances in the file.
-'group' task will be run FIRST and are non blocking for the rest of the sequence.
-In the workflow example underneath, we can imagine that the flow_type 'group' of the task 'save_to_mongodb' is because the task
-is a while loop running in parallel which saves in the db what the 'check_post' task is parsing.
-
-
-Here is an example of a workflow file :
-
-```yaml
-steps
-    - identifier: login_to_platform,
-      args: 
-        password: password1234
-        username: Joseph S
-      flow_type: chain
-
-    - identifier: check_post
-      flow_type: chain
-
-    - identifier: save_in_mongodb
-      args: 
-        user: mongo_user 
-        pw: password1234
-        host: localhost
-        port 27017
-      flow_type: group
-
-instances
-    - check_post
-      args:
-        post_url: https://instagram.com/p/publication1
-      args:
-        post_url: https://instagram.com/p/publication2
-      args:
-        post_url: https://instagram.com/p/publication3
+```python
+@app.libretto("visit_page", bind=True)
+def visit_page(self, session, args: dict):
+    ...
 ```
 
-### Use the CLI  
-
-Tasks can be ran with the CLI, please use 'python -m chanina --help' to learn more.
+### Run a worker
 
 ```bash
-    $ python -m chanina login_workflow.yaml --app path_to_myapp:app --arguments password=$PASSWORD username=$USERNAME
+poetry run python -m chanina --app myapp:app --celery loglevel=info concurrency=4
 ```
 
-You can also manually run a task if your worker is still up
+Everything after `--celery`/`-c` is forwarded to Celery as `key=value` pairs (turned into
+`--key=value`, or a bare `--key` for boolean flags).
+
+### Dispatch a task
+
+From your own script, once a worker is running:
+
+```python
+from myapp import app
+
+# Keyword arguments passed to apply_async become the task's `args` dict.
+app.libretti["visit_page"].task.apply_async(kwargs={"url": "https://example.com"})
+```
+
+Or without writing a dispatch script, straight from the CLI (still requires a worker consuming
+the queue to actually run it):
 
 ```bash
-    $ python -m chanina --task check_post --app path_to_myapp:app --arguments post_url="https://www.instagram.com/p/another-publication-not-in-the-workflow"
+poetry run python -m chanina --app myapp:app --libretto visit_page --config url=https://example.com
 ```
+
+(`--libretto`/`-l` defaults to the built-in `chanina.list_libretti`, which just logs every
+registered libretto — useful as a sanity check that your app loads correctly.)
+
+---
+
+## Persistent browser profiles
+
+```python
+import os
+
+app = ChaninaApplication(
+    __file__,
+    browser_engine="chromium",
+    profile_dir=os.environ.get("CHANINA_PROFILE_DIR"),
+    ...
+)
+```
+
+- **Chromium**: since there's only ever one shared instance, the profile just applies to it —
+  no concurrency caveats. Tasks still each get their own isolated context.
+- **Firefox**: a given profile directory can only be opened by one running Firefox at a time,
+  so this only works cleanly with `concurrency=1`. With a profile set, every task on that worker
+  process shares the same persistent context instead of getting an isolated one per task.
+
+---
+
+## Backward compatibility
+
+Code written against the pre-1.0 API (a single `WorkerSession` per worker process, injected via
+`browser_name`/`user_profile_path`) keeps working: `WorkerSession` is now a thin, deprecated
+compatibility wrapper around the per-task `BrowserContext`, and `browser_name`/
+`user_profile_path` are accepted as deprecated aliases for `browser_engine`/`profile_dir`. Using
+any of these emits a `DeprecationWarning` pointing at the replacement.
 
 ---
 
 ## License
 
 For now this project has no Licence, i'm working on it.
-
