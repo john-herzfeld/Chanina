@@ -1,6 +1,6 @@
 [project]
 name = "chanina"
-version = "1.0.0"
+version = "1.1.0"
 description = " Chanina is a Python application that helps your playwright to build the best libretti."
 authors = [
     {name = "Leo Hehlen",email = "leo.hehlen@pc-rtx.com"}
