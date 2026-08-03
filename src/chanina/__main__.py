@@ -81,7 +81,22 @@ def run_worker(app: ChaninaApplication, command: str = "worker", **options) -> N
     """
     Start the Celery worker, forwarding every k=v CLI argument as --k=v
     (or bare --k when v is a truthy bool).
+
+    A given Firefox profile directory can only be opened by one running
+    Firefox at a time, and browser_engine="firefox" gives every worker
+    process its own local Firefox (see ChaninaApplication's docstring), so
+    concurrency is forced to 1 for that engine regardless of what was
+    passed in.
     """
+    if command == "worker" and app.browser_engine == "firefox":
+        requested = options.get("concurrency")
+        if requested not in (None, "1", 1):
+            logging.warning(
+                f"browser_engine='firefox' only supports one worker process "
+                f"at a time; overriding concurrency={requested!r} with concurrency=1."
+            )
+        options["concurrency"] = 1
+
     argv = [command]
 
     for k, v in options.items():

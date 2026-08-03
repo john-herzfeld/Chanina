@@ -1,6 +1,9 @@
 import importlib
 import logging
 import datetime
+import shutil
+import tempfile
+from pathlib import Path
 
 from colorama import Fore, Style
 from celery import signals
@@ -9,6 +12,46 @@ from celery import signals
 def s_now() -> str:
     """ Current local time formatted as 'HH:MM:SS'. """
     return datetime.datetime.strftime(datetime.datetime.now(), "%H:%M:%S")
+
+
+def prepare_profile_dir(source: str) -> tuple[str, bool]:
+    """
+    Get a browser profile directory safe for one browser to own exclusively,
+    given a user-supplied `source` path.
+
+    A running browser writes lock files, session data, and caches into
+    whatever directory it's pointed at, and a given profile can only be
+    opened by one running browser at a time. So `source` is treated as a
+    read-only template rather than handed to the browser directly: if it
+    already holds a profile, it's copied into a fresh disposable directory
+    under the system temp dir and that copy's path is returned (with
+    `is_copy=True`), leaving `source` untouched for the next launch to
+    copy from again. If `source` doesn't exist yet, there's nothing to
+    protect, so it's created and used as-is (`is_copy=False`) - it becomes
+    the template later launches will copy.
+
+    Returns (profile_dir, is_copy); pass both to cleanup_profile_dir once
+    the browser using it is done.
+    """
+    src = Path(source).resolve()
+    if not src.exists():
+        src.mkdir(parents=True)
+        return str(src), False
+    if not src.is_dir():
+        raise ValueError(f"{src} is not a valid directory.")
+
+    dest = Path(tempfile.mkdtemp(prefix="chanina-profile-"))
+    dest.rmdir()  # copytree refuses to copy into a directory that already exists.
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("*.lock", "lock", "Singleton*"))
+    return str(dest), True
+
+
+def cleanup_profile_dir(profile_dir: str, is_copy: bool) -> None:
+    """ Remove a disposable profile directory previously returned by prepare_profile_dir. """
+    if not is_copy:
+        return
+    logging.info(f"Deleting temporary profile copy {profile_dir} ...")
+    shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 class ImportFromStringError(Exception):

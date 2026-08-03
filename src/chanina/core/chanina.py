@@ -14,7 +14,14 @@ Two engines are supported:
   Firefox instance across OS processes (no launch_server()/connect() pair
   outside Node.js, and connect_over_cdp() only works against Chromium).
   Each worker process launches and owns its own local Firefox instead, the
-  same 1-browser-per-worker-process model as before this refactor.
+  same 1-browser-per-worker-process model as before this refactor. A given
+  profile directory can only be opened by one running Firefox at a time,
+  so chanina.__main__.run_worker forces concurrency=1 for this engine.
+
+Whenever profile_dir is set, for either engine, the directory actually
+handed to the browser is a disposable copy of it made under the system
+temp dir (see chanina.utils.prepare_profile_dir), never profile_dir
+itself - profile_dir is treated as a read-only template.
 """
 import logging
 import time
@@ -29,6 +36,7 @@ from redis import Redis
 from chanina.core.browser_supervisor import BrowserSupervisor
 from chanina.core.libretti import Libretto
 from chanina.default_libretti import build_default_libretti
+from chanina.utils import cleanup_profile_dir, prepare_profile_dir
 
 # Pre-refactor 'browser_name' values ("firefox" or "chrome") mapped onto the
 # current 'browser_engine' values ("firefox" or "chromium").
@@ -70,14 +78,17 @@ class ChaninaApplication:
             celery_config: Extra config forwarded to ``Celery.config_from_object``.
             profile_dir: Directory holding a persistent browser profile
                 (history, cookies, cache, extensions, ...), created if it
-                doesn't exist yet. For ``browser_engine="chromium"`` it is
-                used by the single shared browser subprocess (there is only
-                ever one, so no concurrency concern). For
-                ``browser_engine="firefox"`` it is used by every worker
-                process's own local browser — a given profile directory can
-                only be opened by one running Firefox at a time, so pass a
-                distinct ``profile_dir`` per app (or run with
-                ``concurrency=1``) if you use this with the firefox engine.
+                doesn't exist yet. Treated as a read-only template: what
+                the browser actually gets is a disposable copy of it made
+                under the system temp dir, so profile_dir itself is never
+                written to (see the module docstring). For
+                ``browser_engine="chromium"`` it is used by the single
+                shared browser subprocess (there is only ever one, so no
+                concurrency concern). For ``browser_engine="firefox"`` it
+                is used by every worker process's own local browser — a
+                given profile directory can only be opened by one running
+                Firefox at a time, so ``run_worker`` forces
+                ``concurrency=1`` whenever this engine is used.
                 A typical setup reads this from an env var in your own app
                 script, e.g. ``profile_dir=os.environ.get("CHANINA_PROFILE_DIR")``.
             browser_name: Deprecated alias for ``browser_engine`` using the
@@ -143,6 +154,16 @@ class ChaninaApplication:
         # it instead of getting an isolated one. See new_context() and
         # reuses_shared_context below.
         self._shared_context: BrowserContext | None = None
+        # (profile_dir, is_copy) pairs from prepare_profile_dir(), tracked
+        # separately so each is only ever cleaned up by the process that
+        # created it. _shared_profile_copy backs the one Chromium instance
+        # and lives in the main process (_on_worker_init/_on_worker_shutdown);
+        # _local_profile_copy backs a worker process's own Firefox and lives
+        # there (_launch_local/_disconnect). Forked children inherit
+        # _shared_profile_copy's value from the pre-fork parent but must
+        # never act on it - only the main process owns that copy.
+        self._shared_profile_copy: tuple[str, bool] | None = None
+        self._local_profile_copy: tuple[str, bool] | None = None
 
         if playwright_enabled:
             signals.worker_process_init.connect(self._on_process_init)
@@ -172,6 +193,10 @@ class ChaninaApplication:
         return self._playwright_enabled
 
     @property
+    def browser_engine(self) -> str:
+        return self._browser_engine
+
+    @property
     def worker_session(self):
         """
         Deprecated. Always returns ``None``.
@@ -194,11 +219,16 @@ class ChaninaApplication:
 
     def _on_worker_init(self, **_):
         """ Main process, before the fork: start (or adopt) the shared browser. """
+        profile_dir = self._profile_dir
+        if profile_dir:
+            profile_dir, is_copy = prepare_profile_dir(profile_dir)
+            self._shared_profile_copy = (profile_dir, is_copy)
+
         self._supervisor = BrowserSupervisor(
             redis=self.redis,
             key=self._browser_key,
             headless=self._headless,
-            profile_dir=self._profile_dir,
+            profile_dir=profile_dir,
         )
         self._supervisor.ensure_alive()
         self._supervisor.start_monitor()
@@ -209,6 +239,9 @@ class ChaninaApplication:
         if self._supervisor:
             self._supervisor.stop()
             self._supervisor = None
+        if self._shared_profile_copy:
+            cleanup_profile_dir(*self._shared_profile_copy)
+            self._shared_profile_copy = None
         logging.info("BrowserSupervisor stopped.")
 
     def _on_process_init(self, **_):
@@ -265,15 +298,20 @@ class ChaninaApplication:
         returns a BrowserContext, not a Browser, and can't spawn further
         contexts of its own. So with a profile, every task on this worker
         process shares that single persistent context instead of getting
-        an isolated one (see new_context() / reuses_shared_context). A
-        given profile directory can only be opened by one running Firefox
-        at a time, so this only works cleanly with concurrency=1.
+        an isolated one (see new_context() / reuses_shared_context).
+
+        The directory actually handed to Firefox is a disposable copy of
+        profile_dir (see prepare_profile_dir), never profile_dir itself -
+        and a given profile directory can still only be opened by one
+        running Firefox at a time, so this only works cleanly with
+        concurrency=1 (enforced by chanina.__main__.run_worker).
         """
         self._pw = sync_playwright().start()
         if self._profile_dir:
-            Path(self._profile_dir).mkdir(parents=True, exist_ok=True)
+            profile_dir, is_copy = prepare_profile_dir(self._profile_dir)
+            self._local_profile_copy = (profile_dir, is_copy)
             self._browser = self._pw.firefox.launch_persistent_context(
-                user_data_dir=self._profile_dir,
+                user_data_dir=profile_dir,
                 headless=self._headless,
             )
             # Here the persistent context IS the launched handle itself.
@@ -294,6 +332,9 @@ class ChaninaApplication:
                 logging.error(f"Closed the browser handle with an exception: {e}")
             self._browser = None
         self._shared_context = None
+        if self._local_profile_copy:
+            cleanup_profile_dir(*self._local_profile_copy)
+            self._local_profile_copy = None
         if self._pw is not None:
             self._pw.stop()
             self._pw = None

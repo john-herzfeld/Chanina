@@ -138,9 +138,16 @@ the profile's cookies/storage anyway, so every task reuses the profile's own per
 instead (concurrently, if several tasks run at once). Without a profile, contexts stay isolated
 per task as usual.
 
+`profile_dir` is treated as a read-only template, never handed to the browser directly: if it
+already holds a profile, chanina copies it into a disposable directory under the system temp dir
+before launching, and deletes that copy again on shutdown. This keeps the template reusable
+across restarts and immune to being corrupted by a crashed run. If `profile_dir` doesn't exist
+yet, it's created and used as-is, becoming the template for next time.
+
 - **Chromium**: since there's only ever one shared instance, this has no concurrency caveats.
-- **Firefox**: a given profile directory can only be opened by one running Firefox at a time,
-  so this only works cleanly with `concurrency=1`.
+- **Firefox**: a given profile directory can only be opened by one running Firefox at a time, so
+  `python -m chanina --celery ...` forces `concurrency=1` whenever `browser_engine="firefox"` is
+  used, regardless of what's passed.
 
 ---
 
