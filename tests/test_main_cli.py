@@ -34,6 +34,21 @@ def test_import_config_raises_when_everything_gets_skipped():
         import_config(["not-a-kv"])
 
 
+def test_import_config_bare_as_flag_turns_bare_tokens_into_true():
+    assert import_config(["without-mingle"], bare_as_flag=True) == {"without-mingle": True}
+
+
+def test_import_config_bare_as_flag_mixes_with_key_value_pairs():
+    assert import_config(
+        ["without-mingle", "concurrency=4", "without-gossip"], bare_as_flag=True
+    ) == {"without-mingle": True, "concurrency": "4", "without-gossip": True}
+
+
+def test_import_config_bare_as_flag_still_raises_on_a_key_or_value_missing():
+    with pytest.raises(ValueError):
+        import_config(["a="], bare_as_flag=True)
+
+
 def _make_fake_app(browser_engine: str) -> MagicMock:
     app = MagicMock()
     app.browser_engine = browser_engine
@@ -70,3 +85,14 @@ def test_run_worker_does_not_force_concurrency_for_non_worker_commands():
     run_worker(app, command="inspect")
 
     app.celery.start.assert_called_once_with(["inspect"])
+
+
+def test_run_worker_forwards_bare_boolean_flags_from_import_config():
+    app = _make_fake_app("chromium")
+    options = import_config(["without-mingle", "without-gossip", "concurrency=4"], bare_as_flag=True)
+
+    run_worker(app, **options)
+
+    app.celery.start.assert_called_once_with(
+        ["worker", "--without-mingle", "--without-gossip", "--concurrency=4"]
+    )

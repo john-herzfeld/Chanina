@@ -1,3 +1,4 @@
+import time
 from unittest.mock import MagicMock, patch
 
 from chanina.core.browser_supervisor import BrowserSupervisor
@@ -82,6 +83,115 @@ def test_start_forwards_an_empty_profile_dir_by_default():
 
     argv = popen.call_args.args[0]
     assert argv[-1] == ""
+
+
+def _wait_for(predicate, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.01)
+    raise AssertionError("condition was not met in time")
+
+
+def test_monitor_crashes_by_default_when_a_restart_attempt_fails():
+    redis = FakeRedis()
+    proc = _fake_proc("http://127.0.0.1:1111")
+    fatal_calls = []
+
+    supervisor = BrowserSupervisor(
+        redis=redis,
+        key="chanina:test:endpoint",
+        monitor_interval=0.01,
+        on_fatal=fatal_calls.append,
+    )
+
+    with patch(
+        "chanina.core.browser_supervisor.subprocess.Popen",
+        side_effect=[proc, RuntimeError("boom")],
+    ):
+        supervisor.ensure_alive()
+        proc.poll.return_value = 1  # simulate the browser subprocess dying
+        supervisor.start_monitor()
+        _wait_for(lambda: fatal_calls)
+
+    supervisor.stop()
+    assert len(fatal_calls) == 1
+    assert "boom" in fatal_calls[0]
+
+
+def test_monitor_only_crashes_once_even_if_stop_is_slow():
+    redis = FakeRedis()
+    proc = _fake_proc("http://127.0.0.1:1111")
+    fatal_calls = []
+
+    supervisor = BrowserSupervisor(
+        redis=redis,
+        key="chanina:test:endpoint",
+        monitor_interval=0.01,
+        on_fatal=fatal_calls.append,
+    )
+
+    with patch(
+        "chanina.core.browser_supervisor.subprocess.Popen",
+        side_effect=[proc, RuntimeError("boom")],
+    ):
+        supervisor.ensure_alive()
+        proc.poll.return_value = 1
+        supervisor.start_monitor()
+        _wait_for(lambda: fatal_calls)
+        time.sleep(0.05)  # give the loop a few more ticks it should not take
+
+    supervisor.stop()
+    assert len(fatal_calls) == 1
+
+
+def test_monitor_does_not_crash_when_crash_on_failure_is_disabled():
+    redis = FakeRedis()
+    proc = _fake_proc("http://127.0.0.1:1111")
+    fatal_calls = []
+
+    supervisor = BrowserSupervisor(
+        redis=redis,
+        key="chanina:test:endpoint",
+        monitor_interval=0.01,
+        crash_on_failure=False,
+        on_fatal=fatal_calls.append,
+    )
+
+    with patch(
+        "chanina.core.browser_supervisor.subprocess.Popen",
+        side_effect=[proc] + [RuntimeError("boom")] * 5,
+    ):
+        supervisor.ensure_alive()
+        proc.poll.return_value = 1
+        supervisor.start_monitor()
+        time.sleep(0.1)
+
+    supervisor.stop()
+    assert fatal_calls == []
+
+
+def test_default_on_fatal_is_crash_process():
+    redis = FakeRedis()
+    proc = _fake_proc("http://127.0.0.1:1111")
+
+    # crash_process must be patched *before* the supervisor is constructed:
+    # __init__ resolves the default on_fatal callback (on_fatal or
+    # crash_process) eagerly, so patching afterwards would leave the real,
+    # SIGKILL-ing crash_process bound instead of the mock.
+    with patch(
+        "chanina.core.browser_supervisor.subprocess.Popen",
+        side_effect=[proc, RuntimeError("boom")],
+    ), patch("chanina.core.browser_supervisor.crash_process") as crash_process:
+        supervisor = BrowserSupervisor(redis=redis, key="chanina:test:endpoint", monitor_interval=0.01)
+        supervisor.ensure_alive()
+        proc.poll.return_value = 1
+        supervisor.start_monitor()
+        _wait_for(lambda: crash_process.called)
+
+    supervisor.stop()
+    crash_process.assert_called_once()
 
 
 def test_stop_terminates_the_running_process():

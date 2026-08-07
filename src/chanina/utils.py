@@ -1,7 +1,9 @@
 import importlib
 import logging
 import datetime
+import os
 import shutil
+import signal
 import tempfile
 from pathlib import Path
 
@@ -52,6 +54,22 @@ def cleanup_profile_dir(profile_dir: str, is_copy: bool) -> None:
         return
     logging.info(f"Deleting temporary profile copy {profile_dir} ...")
     shutil.rmtree(profile_dir, ignore_errors=True)
+
+
+def crash_process(reason: str, pid: int | None = None) -> None:
+    """
+    Kill a process immediately with SIGKILL, after logging why.
+
+    Used when the browser (shared Chromium subprocess or a worker's own
+    local Firefox) becomes unrecoverable: a graceful shutdown could hang
+    forever waiting on work that will never finish without a browser, so
+    this favors an immediate, unmistakable death instead - the kind an
+    external supervisor (e.g. Kubernetes' restartPolicy) reacts to by
+    relaunching the whole worker from scratch.
+    """
+    target = os.getpid() if pid is None else pid
+    logging.critical(f"Fatal: {reason}. Killing process {target} so it gets relaunched.")
+    os.kill(target, signal.SIGKILL)
 
 
 class ImportFromStringError(Exception):

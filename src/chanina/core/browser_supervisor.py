@@ -10,8 +10,11 @@ import subprocess
 import sys
 import threading
 import time
+from typing import Callable
 
 from redis import Redis
+
+from chanina.utils import crash_process
 
 
 class BrowserSupervisor:
@@ -27,6 +30,8 @@ class BrowserSupervisor:
         headless: bool = True,
         monitor_interval: float = 5.0,
         profile_dir: str | None = None,
+        crash_on_failure: bool = True,
+        on_fatal: Callable[[str], None] | None = None,
     ) -> None:
         """
         Args:
@@ -40,12 +45,24 @@ class BrowserSupervisor:
                 the browser subprocess (see ChaninaApplication's docstring).
                 Since there is only ever one shared Chromium instance, this
                 has no multi-process concurrency concerns.
+            crash_on_failure: If the monitor thread fails to restart the
+                browser subprocess, kill this (the Celery main) process
+                instead of logging and retrying on the next tick - so a
+                process supervisor (e.g. Kubernetes' restartPolicy) relaunches
+                the whole worker rather than it silently sitting there with
+                no shared browser to hand out.
+            on_fatal: Called with a reason string instead of the default
+                crash_process(reason) when crash_on_failure fires. Mainly
+                for tests that need to observe the failure without actually
+                killing the test process.
         """
         self.redis = redis
         self.key = key
         self.headless = headless
         self.monitor_interval = monitor_interval
         self.profile_dir = profile_dir
+        self.crash_on_failure = crash_on_failure
+        self._on_fatal = on_fatal or crash_process
 
         self._lock = threading.Lock()
         self._proc: subprocess.Popen | None = None
@@ -92,13 +109,22 @@ class BrowserSupervisor:
         return self.start()
 
     def start_monitor(self) -> None:
-        """ Periodically check the browser is alive, restarting it otherwise. """
+        """
+        Periodically check the browser is alive, restarting it otherwise.
+
+        If crash_on_failure is set (the default) and a restart attempt
+        fails, this kills the process instead of retrying on the next
+        tick - see the crash_on_failure docstring on __init__.
+        """
         def _loop():
             while not self._monitor_stop.wait(self.monitor_interval):
                 try:
                     self.ensure_alive()
                 except Exception as e:
                     logging.error(f"BrowserSupervisor monitor failed to restart the browser: {e}")
+                    if self.crash_on_failure:
+                        self._on_fatal(f"Shared browser subprocess could not be restarted: {e}")
+                        return
 
         self._monitor_stop.clear()
         self._monitor_thread = threading.Thread(target=_loop, daemon=True)

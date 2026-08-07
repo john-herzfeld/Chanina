@@ -24,6 +24,7 @@ temp dir (see chanina.utils.prepare_profile_dir), never profile_dir
 itself - profile_dir is treated as a read-only template.
 """
 import logging
+import os
 import time
 import warnings
 from pathlib import Path
@@ -36,7 +37,7 @@ from redis import Redis
 from chanina.core.browser_supervisor import BrowserSupervisor
 from chanina.core.libretti import Libretto
 from chanina.default_libretti import build_default_libretti
-from chanina.utils import cleanup_profile_dir, prepare_profile_dir
+from chanina.utils import cleanup_profile_dir, crash_process, prepare_profile_dir
 
 # Pre-refactor 'browser_name' values ("firefox" or "chrome") mapped onto the
 # current 'browser_engine' values ("firefox" or "chromium").
@@ -57,6 +58,7 @@ class ChaninaApplication:
         browser_engine: str | None = None,
         celery_config: dict = {},
         profile_dir: str | None = None,
+        crash_on_browser_failure: bool = True,
         *,
         browser_name: str | None = None,
         user_profile_path: str | None = None,
@@ -91,6 +93,16 @@ class ChaninaApplication:
                 ``concurrency=1`` whenever this engine is used.
                 A typical setup reads this from an env var in your own app
                 script, e.g. ``profile_dir=os.environ.get("CHANINA_PROFILE_DIR")``.
+            crash_on_browser_failure: If the browser can't be recovered -
+                the shared Chromium subprocess fails to restart, or a
+                worker process exhausts its reconnect attempts against
+                either engine - kill this process (SIGKILL) instead of
+                logging and carrying on with no working browser. Meant for
+                deployments where a process supervisor (e.g. Kubernetes'
+                restartPolicy) relaunches the whole worker from scratch on
+                exit, which a silent, partially-broken worker can't trigger
+                on its own. Set to ``False`` to restore the old behavior of
+                only failing the affected task(s).
             browser_name: Deprecated alias for ``browser_engine`` using the
                 pre-refactor values ``"firefox"``/``"chrome"``. Use
                 ``browser_engine`` (``"firefox"``/``"chromium"``) instead.
@@ -145,6 +157,7 @@ class ChaninaApplication:
         self._browser_engine = browser_engine
         self._profile_dir = profile_dir
         self._playwright_enabled = playwright_enabled
+        self._crash_on_browser_failure = crash_on_browser_failure
 
         self._supervisor: BrowserSupervisor | None = None
         self._pw: Playwright | None = None
@@ -229,6 +242,7 @@ class ChaninaApplication:
             key=self._browser_key,
             headless=self._headless,
             profile_dir=profile_dir,
+            crash_on_failure=self._crash_on_browser_failure,
         )
         self._supervisor.ensure_alive()
         self._supervisor.start_monitor()
@@ -346,6 +360,13 @@ class ChaninaApplication:
         Redis to give the main process's BrowserSupervisor monitor time to
         restart the browser and republish its endpoint. For firefox, just
         relaunches a fresh local instance.
+
+        If every retry fails and crash_on_browser_failure is set (the
+        default), this kills both the Celery main process (this worker
+        child's parent) and this process itself instead of only raising -
+        see the crash_on_browser_failure docstring on __init__. The raise
+        below still runs afterwards so the behavior is unchanged whenever
+        crash_on_browser_failure is disabled.
         """
         self._disconnect()
         attach = self._connect if self._browser_engine == "chromium" else self._launch_local
@@ -357,6 +378,10 @@ class ChaninaApplication:
             except Exception as e:
                 last_error = e
                 time.sleep(delay)
+        if self._crash_on_browser_failure:
+            reason = f"Worker process could not reconnect to the browser after {retries} attempts: {last_error}"
+            crash_process(reason, pid=os.getppid())
+            crash_process(reason, pid=os.getpid())
         raise ConnectionError("Could not reconnect to the browser.") from last_error
 
     @property

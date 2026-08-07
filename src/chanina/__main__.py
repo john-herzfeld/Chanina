@@ -20,10 +20,16 @@ def import_application_object(path: str) -> ChaninaApplication:
     return chanina_app
 
 
-def import_config(config: list[str]):
+def import_config(config: list[str], bare_as_flag: bool = False):
     """
     Parse the list of nargs passed to the cli and makes it a dict of args.
     nargs needs to be passed in the format: -r key=value key2=value2.
+
+    When bare_as_flag is True, entries with no '=' are kept as boolean
+    flags (value True) instead of being skipped - used for -c/--celery so
+    no-argument Celery flags (e.g. --without-mingle, --without-gossip) can
+    be forwarded; run_worker turns a True value back into a bare --key.
+
     Exceptions are raised if anything is not correct.
     """
     conf = {}
@@ -31,7 +37,9 @@ def import_config(config: list[str]):
         return conf
 
     for kv in config:
-        if not "=" in kv:
+        if "=" not in kv:
+            if bare_as_flag and kv:
+                conf[kv] = True
             continue
         k, v = kv.split("=", 1)
         if not k or not v:
@@ -65,7 +73,11 @@ def add_arguments(argparser: ArgumentParser) -> None:
     group.add_argument(
         "--celery",
         "-c",
-        help="Runs the celery app, every var=value after this flag will be passed to celery.",
+        help=(
+            "Runs the celery app, every var=value after this flag will be passed to celery "
+            "as --var=value; a bare token with no '=' (e.g. without-mingle) is passed as a "
+            "no-argument flag (--without-mingle)."
+        ),
         required=False,
         nargs="*"
     )
@@ -125,7 +137,7 @@ def run() -> None:
 
     # First we check if the command is for a celery worker.
     if isinstance(celery_args, list):
-        args = import_config(celery_args)
+        args = import_config(celery_args, bare_as_flag=True)
         run_worker(app, **args)
     else:
         # Transform config into the needed components for the run.

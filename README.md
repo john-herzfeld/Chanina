@@ -20,6 +20,10 @@ Chanina takes care of the browser lifecycle and hands each task an isolated brow
 - **Celery-based task system**: every libretto is a real Celery task — use `bind=True` and any
   other Celery task option you'd normally use.
 - **CLI**: run a worker, or dispatch a single libretto, from the terminal.
+- **Crash instead of silently degrading**: if the browser can't be recovered (the shared
+  Chromium subprocess fails to restart, or a worker exhausts its reconnect attempts against
+  either engine), the worker process is killed outright instead of carrying on without a working
+  browser — see [Crashing on an unrecoverable browser](#crashing-on-an-unrecoverable-browser).
 
 ---
 
@@ -94,8 +98,15 @@ def visit_page(self, session, args: dict):
 poetry run python -m chanina --app myapp:app --celery loglevel=info concurrency=4
 ```
 
-Everything after `--celery`/`-c` is forwarded to Celery as `key=value` pairs (turned into
-`--key=value`, or a bare `--key` for boolean flags).
+Everything after `--celery`/`-c` is forwarded to Celery: a `key=value` token becomes
+`--key=value`, and a bare token with no `=` (e.g. `without-mingle`) becomes a no-argument flag
+(`--without-mingle`) — for Celery options like `--without-mingle`, `--without-gossip`, or
+`--without-heartbeat` that don't take a value:
+
+```bash
+poetry run python -m chanina --app myapp:app \
+    --celery without-mingle without-gossip without-heartbeat concurrency=4
+```
 
 ### Dispatch a task
 
@@ -148,6 +159,37 @@ yet, it's created and used as-is, becoming the template for next time.
 - **Firefox**: a given profile directory can only be opened by one running Firefox at a time, so
   `python -m chanina --celery ...` forces `concurrency=1` whenever `browser_engine="firefox"` is
   used, regardless of what's passed.
+
+---
+
+## Crashing on an unrecoverable browser
+
+By default (`crash_on_browser_failure=True`, the default on `ChaninaApplication`), chanina kills
+the worker process outright — `SIGKILL`, no graceful shutdown — instead of carrying on without a
+working browser:
+
+- **Chromium**: the main process's `BrowserSupervisor` monitor thread checks the shared
+  subprocess is alive every `monitor_interval` seconds; if a restart attempt fails, it kills the
+  main (Celery) process immediately.
+- **Both engines**: when a worker process can't get a browser handle for a task — the shared
+  Chromium is unreachable, or its own local Firefox is dead — it retries a few times and, if that
+  still fails, kills both itself and its parent (the main Celery process).
+
+This is meant for deployments where a process supervisor (a Kubernetes `restartPolicy`, for
+example) relaunches the whole worker from scratch whenever it exits — a hard, unmistakable death
+gets that restart, where a silently degraded worker (still running, still picking up tasks, but
+failing every one of them because it has no browser) wouldn't.
+
+Set `crash_on_browser_failure=False` to go back to the old behavior of only failing the affected
+task(s) and letting the worker keep retrying on its own:
+
+```python
+app = ChaninaApplication(
+    __file__,
+    crash_on_browser_failure=False,
+    ...
+)
+```
 
 ---
 
