@@ -16,9 +16,15 @@ class Libretto:
     :class:`playwright.sync_api.BrowserContext`. Normally that context was
     created fresh for this task alone and is closed automatically once the
     task returns (successfully or not); the one exception is
-    ``app.reuses_shared_context`` (firefox engine with a profile directory),
-    where every task on the same worker process shares one persistent
-    context that outlives any single task and is never closed here.
+    ``app.reuses_shared_context`` (a profile directory is set), where every
+    task sharing that context (across worker processes for chromium, or on
+    the same worker process for firefox) reuses one persistent context that
+    outlives any single task and is never closed here. Either way, any page
+    the task opened via ``session.new_page()`` and left open - including on
+    the exception path - is still closed once the task returns, so a
+    failing task can't leak an open page/tab forever (see
+    :meth:`WorkerSession._close_opened_pages
+    <chanina.core.worker_session.WorkerSession._close_opened_pages>`).
     """
 
     def __init__(
@@ -56,6 +62,13 @@ class Libretto:
                 else:
                     return self.func(session, kwargs)
             finally:
+                # Close any page the task opened (via session.new_page())
+                # and left open - most importantly on the exception path,
+                # where the task's own cleanup code never got to run. This
+                # matters even when the context below gets closed right
+                # after, and is the only cleanup that happens at all when
+                # reuses_shared_context is set (see _close_opened_pages).
+                session._close_opened_pages()
                 # Closing the raw context (rather than session.close())
                 # avoids tripping the deprecation warning on our own,
                 # expected, end-of-task cleanup. Skipped entirely when the

@@ -105,6 +105,71 @@ def test_isinstance_check_still_works_like_before_the_refactor():
     assert isinstance(session, WorkerSession)
 
 
+class FakePage:
+    def __init__(self):
+        self._closed = False
+        self.close_calls = 0
+
+    def is_closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        self.close_calls += 1
+        self._closed = True
+
+
+class FakeContextWithPages:
+    def __init__(self):
+        self.new_page_calls = 0
+
+    def new_page(self, **kwargs):
+        self.new_page_calls += 1
+        return FakePage()
+
+
+def test_new_page_tracks_the_page_it_opened():
+    session = WorkerSession(browser_context=FakeContextWithPages(), app=FakeApp())
+
+    page = session.new_page()
+
+    assert session._opened_pages == [page]
+
+
+def test_close_opened_pages_closes_every_still_open_page():
+    session = WorkerSession(browser_context=FakeContextWithPages(), app=FakeApp())
+    page_a = session.new_page()
+    page_b = session.new_page()
+
+    session._close_opened_pages()
+
+    assert page_a.close_calls == 1
+    assert page_b.close_calls == 1
+    assert session._opened_pages == []
+
+
+def test_close_opened_pages_skips_a_page_already_closed():
+    session = WorkerSession(browser_context=FakeContextWithPages(), app=FakeApp())
+    page = session.new_page()
+    page.close()
+
+    session._close_opened_pages()
+
+    assert page.close_calls == 1  # not called again
+
+
+def test_close_opened_pages_does_not_raise_if_a_page_close_fails():
+    class RaisingPage(FakePage):
+        def close(self):
+            raise RuntimeError("page crashed")
+
+    session = WorkerSession(browser_context=FakeContextWithPages(), app=FakeApp())
+    session._opened_pages.append(RaisingPage())
+
+    session._close_opened_pages()  # must not raise
+
+    assert session._opened_pages == []
+
+
 class warnings_as_errors:
     """ Context manager: fail the test if any warning is raised inside it. """
     def __enter__(self):

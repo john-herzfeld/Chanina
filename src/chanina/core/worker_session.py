@@ -21,6 +21,7 @@ process-level session (``user_context``, ``playwright``, dict-style
 New code should just use the context argument directly and drop any of the
 attributes flagged below as deprecated.
 """
+import logging
 import warnings
 from typing import Any
 
@@ -43,6 +44,12 @@ class WorkerSession:
         # process and was shared across every task it handled. It is now
         # scoped to a single task, since contexts are created per task.
         self.user_context: dict[str, Any] = {}
+        # Pages opened through this session, tracked so Libretto can close
+        # any the task left open once it returns (or raises) - see
+        # _close_opened_pages. Only pages opened via this session's
+        # new_page() are tracked; a page opened directly on the underlying
+        # BrowserContext (or a popup opened by page content itself) is not.
+        self._opened_pages: list[Page] = []
 
     @property
     def playwright(self) -> Playwright:
@@ -80,7 +87,28 @@ class WorkerSession:
                 stacklevel=2,
             )
             kwargs = {**args, **kwargs}
-        return self.browser_context.new_page(**kwargs)
+        page = self.browser_context.new_page(**kwargs)
+        self._opened_pages.append(page)
+        return page
+
+    def _close_opened_pages(self) -> None:
+        """
+        Close every still-open page this session opened via new_page().
+
+        Called by Libretto once the task returns or raises, so a page a
+        failing task left open (e.g. mid-navigation, before its own
+        cleanup code ran) doesn't linger forever. This matters most when
+        ``app.reuses_shared_context`` is set: the context itself outlives
+        the task and is never closed, so nothing else would ever close
+        pages left open on it.
+        """
+        for page in self._opened_pages:
+            try:
+                if not page.is_closed():
+                    page.close()
+            except Exception as e:
+                logging.warning(f"Failed to close a page left open by a task: {e}")
+        self._opened_pages.clear()
 
     def close(self) -> None:
         """

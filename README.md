@@ -149,6 +149,12 @@ the profile's cookies/storage anyway, so every task reuses the profile's own per
 instead (concurrently, if several tasks run at once). Without a profile, contexts stay isolated
 per task as usual.
 
+The context itself is never closed between tasks in this mode, but any page a task opened via
+`session.new_page()` still is, right after the task returns — successfully or not. That's what
+keeps a task that raised mid-navigation from leaking an open tab in the shared browser forever;
+it applies regardless of whether a profile is set, it's just only visible when it is, since
+without one the whole context (pages included) is closed anyway.
+
 `profile_dir` is treated as a read-only template, never handed to the browser directly: if it
 already holds a profile, chanina copies it into a disposable directory under the system temp dir
 before launching, and deletes that copy again on shutdown. This keeps the template reusable
